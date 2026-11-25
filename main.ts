@@ -1,43 +1,111 @@
-// Unsent: The Micro-Confession Sprint — a make.fun bounty entry.
+// Micro-confession entry for the "Unsent" sprint (v2).
 //
-// One micro-confession in two parts: a "To:" line naming who the
-// message was meant for, and the single line that was typed into the
-// draft box and never sent. The program prints the entry to stdout
-// and writes the exact same bytes, with no trailing newline, to
-// entry.txt inside the harness output directory.
+// The entry is a single unsent message: a short "To:" line saying
+// who it was meant for, followed by the one line that was drafted
+// and never sent. The program below emits those exact bytes to
+// stdout and to entry.txt inside the harness output directory.
 
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
-const ENTRY =
-  "To: my ex-roommate\n" +
-  "i kept your spare key for two years after you moved out because giving it back meant admitting you weren't coming back";
+// The message itself, kept as a list of lines so the shape of the
+// entry (one address line, one message line) is visible at a glance.
+const ENTRY_LINES: readonly string[] = [
+  "To: mum",
+  "i miss dad too and i check your facebook every night to see if you're okay but i never comment because i don't want you crying at your desk again",
+];
 
-// The sealed gate allows 1 to 260 characters in the whole file, and
-// the judge brief caps the unsent message itself at one line of at
-// most 200 characters, so both limits are checked here before writing.
-const MAX_TOTAL_CHARS = 260;
-const MAX_MESSAGE_CHARS = 200;
+const TOTAL_GATE = { min: 1, max: 260 };
+const MESSAGE_LINE_LIMIT = 200;
 
-const lines = ENTRY.split("\n");
-if (lines.length !== 2) {
-  throw new Error("entry must be exactly two lines: a To: line and the message");
-}
-if (!lines[0].startsWith("To: ")) {
-  throw new Error("entry must start with a To: line");
-}
-if (lines[1].length > MAX_MESSAGE_CHARS) {
-  throw new Error(`message line is ${lines[1].length} chars, over the 200-char cap`);
-}
-if (ENTRY.length < 1 || ENTRY.length > MAX_TOTAL_CHARS) {
-  throw new Error(`entry is ${ENTRY.length} chars, outside the 1-260 gate`);
-}
-if (ENTRY.trim().length === 0) {
-  throw new Error("entry must not be only whitespace");
+type Check = { ok: boolean; detail: string };
+
+function checkLineCount(lines: readonly string[]): Check {
+  return {
+    ok: lines.length === 2,
+    detail: `expected exactly 2 lines, got ${lines.length}`,
+  };
 }
 
-const outDir = process.env.MAKEFUN_OUTPUT_DIR ?? "/output";
-mkdirSync(outDir, { recursive: true });
-writeFileSync(join(outDir, "entry.txt"), ENTRY, "utf8");
+function checkAddressLine(lines: readonly string[]): Check {
+  const first = lines[0] ?? "";
+  return {
+    ok: first.startsWith("To: ") && first.length > "To: ".length,
+    detail: `first line must name an addressee ("To: ..."), got ${JSON.stringify(first)}`,
+  };
+}
 
-console.log(ENTRY);
+function checkMessageLine(lines: readonly string[]): Check {
+  const message = lines[1] ?? "";
+  return {
+    ok: message.length > 0 && message.length <= MESSAGE_LINE_LIMIT,
+    detail: `message line must be 1-${MESSAGE_LINE_LIMIT} chars, got ${message.length}`,
+  };
+}
+
+function checkTotalLength(text: string): Check {
+  return {
+    ok: text.length >= TOTAL_GATE.min && text.length <= TOTAL_GATE.max,
+    detail: `total length must be ${TOTAL_GATE.min}-${TOTAL_GATE.max} chars, got ${text.length}`,
+  };
+}
+
+function checkNotBlank(text: string): Check {
+  return {
+    ok: text.trim().length > 0,
+    detail: "entry must contain non-whitespace text",
+  };
+}
+
+function checkNoStrayControlChars(text: string): Check {
+  const bad = /[\r\t]/.test(text) || text.endsWith("\n");
+  return {
+    ok: !bad,
+    detail: "entry must not contain CR/tabs or end with a newline",
+  };
+}
+
+function validateEntry(lines: readonly string[], text: string): void {
+  const checks: Check[] = [
+    checkLineCount(lines),
+    checkAddressLine(lines),
+    checkMessageLine(lines),
+    checkTotalLength(text),
+    checkNotBlank(text),
+    checkNoStrayControlChars(text),
+  ];
+  const failed = checks.filter((c) => !c.ok);
+  if (failed.length > 0) {
+    throw new Error(
+      "entry failed validation: " + failed.map((c) => c.detail).join("; "),
+    );
+  }
+}
+
+function outputDirectory(): string {
+  const dir = process.env.MAKEFUN_OUTPUT_DIR;
+  if (dir !== undefined && dir.length > 0) {
+    return dir;
+  }
+  return "/output";
+}
+
+function emit(entry: string): void {
+  const dir = outputDirectory();
+  fs.mkdirSync(dir, { recursive: true });
+  const target = path.join(dir, "entry.txt");
+  fs.writeFileSync(target, entry, "utf8");
+  const roundTrip = fs.readFileSync(target, "utf8");
+  if (roundTrip !== entry) {
+    throw new Error("entry.txt round-trip mismatch");
+  }
+}
+
+function main(): void {
+  const entry = ENTRY_LINES.join("\n");
+  validateEntry(ENTRY_LINES, entry);
+  emit(entry);
+  process.stdout.write(entry + "\n");
+}
+
+main();
